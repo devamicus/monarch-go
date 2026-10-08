@@ -29,6 +29,9 @@ const (
 	ModeRestricted = "restricted"
 )
 
+// ErrNotServing is returned when the install has no allow-snapshot in force.
+var ErrNotServing = errors.New("monarch: not serving")
+
 // Option configures one deployment. Every process of that deployment must
 // share StateDir so they present one install identity.
 type Option struct {
@@ -132,12 +135,99 @@ func (c *Client) Limit(name string) (int64, bool) {
 }
 
 // Config is the compiled runtime document from the current allow-snapshot.
-func (c *Client) Config() (int64, map[string]any) {
-	claims, ok := c.serving()
-	if !ok {
-		return 0, map[string]any{}
+// It returns ErrNotServing when the install is restricted, including when the
+// caller has not checked Mode first.
+func (c *Client) Config() (int64, map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.evaluate(c.opt.Now())
+	if c.mode != ModeServing {
+		return 0, map[string]any{}, c.restricted()
 	}
-	return claims.Config.Revision, claims.Config.Values
+	claims, err := c.verified(c.opt.Now())
+	if err != nil {
+		return 0, map[string]any{}, err
+	}
+	values := claims.Config.Values
+	if values == nil {
+		values = map[string]any{}
+	}
+	out := make(map[string]any, len(values))
+	for k, v := range values {
+		out[k] = v
+	}
+	return claims.Config.Revision, out, nil
+}
+
+// Guard activates this install when a license key is set, then calls app only
+// while the snapshot is serving. app is not called when the install is restricted.
+// The context passed to app is cancelled if a later heartbeat leaves the restricted state.
+func (c *Client) Guard(ctx context.Context, app func(context.Context) error) error {
+	if err := c.prepare(ctx); err != nil {
+		return err
+	}
+	if err := c.notServing(); err != nil {
+		return err
+	}
+	appCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go c.supervise(appCtx, cancel)
+	return app(appCtx)
+}
+
+func (c *Client) prepare(ctx context.Context) error {
+	c.mu.Lock()
+	has := c.cache.Token != ""
+	c.mu.Unlock()
+	if has || c.opt.LicenseKey == "" {
+		return nil
+	}
+	return c.Activate(ctx)
+}
+
+func (c *Client) supervise(ctx context.Context, cancel context.CancelFunc) {
+	for {
+		if err := c.notServing(); err != nil {
+			cancel()
+			return
+		}
+		wait := c.nextWait()
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+			c.mu.Lock()
+			delivery := ""
+			if claims, err := c.verified(c.opt.Now()); err == nil {
+				delivery = claims.Delivery
+			}
+			instanceID := c.cache.InstanceID
+			c.mu.Unlock()
+			if delivery == token.DeliveryFile || instanceID == "" {
+				continue
+			}
+			_ = c.Heartbeat(ctx)
+		}
+	}
+}
+
+func (c *Client) notServing() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.evaluate(c.opt.Now())
+	if c.mode == ModeServing {
+		return nil
+	}
+	return c.restricted()
+}
+
+func (c *Client) restricted() error {
+	if c.reason == "" {
+		return ErrNotServing
+	}
+	return fmt.Errorf("%w: %s", ErrNotServing, c.reason)
 }
 
 func (c *Client) serving() (token.Claims, bool) {

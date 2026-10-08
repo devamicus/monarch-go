@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,6 +46,9 @@ func TestImportAndRestrict(t *testing.T) {
 	if !client.Allows("sso") {
 		t.Fatal("expected sso")
 	}
+	if _, _, err := client.Config(); err != nil {
+		t.Fatal(err)
+	}
 	n, ok := client.Limit("nodes")
 	if !ok || n != 3 {
 		t.Fatalf("limit %d %v", n, ok)
@@ -60,6 +64,51 @@ func TestImportAndRestrict(t *testing.T) {
 	}
 	if reloaded.Mode() != monarch.ModeRestricted || reloaded.Reason() != "revoked" {
 		t.Fatalf("mode %s reason %s", reloaded.Mode(), reloaded.Reason())
+	}
+}
+
+func TestGuardAndConfig(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	masterPub, masterPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuePub, issuePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	masters := token.Masters{"master-2026": masterPub}
+	client, err := monarch.Open(monarch.Option{StateDir: dir, Masters: masters, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, cfg, err := client.Config(); !errors.Is(err, monarch.ErrNotServing) || len(cfg) != 0 {
+		t.Fatalf("config %v %v", cfg, err)
+	}
+	started := false
+	err = client.Guard(context.Background(), func(context.Context) error {
+		started = true
+		return nil
+	})
+	if !errors.Is(err, monarch.ErrNotServing) || started {
+		t.Fatalf("started %v err %v", started, err)
+	}
+	snapshot, delegation := signSnapshot(t, now, masterPriv, issuePub, issuePriv, client.PublicKey(), token.EnforcementAllow, "")
+	if err := client.Import(snapshot, delegation); err != nil {
+		t.Fatal(err)
+	}
+	var region any
+	err = client.Guard(context.Background(), func(context.Context) error {
+		_, cfg, err := client.Config()
+		if err != nil {
+			return err
+		}
+		region = cfg["region"]
+		return nil
+	})
+	if err != nil || region != "eu" {
+		t.Fatalf("region %v err %v", region, err)
 	}
 }
 
