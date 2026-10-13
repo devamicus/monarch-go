@@ -1,6 +1,7 @@
 package monarch_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +21,11 @@ import (
 func TestImportAndRestrict(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
-	client, err := monarch.Open(monarch.Option{StateDir: dir, Masters: token.Masters{}, Now: func() time.Time { return now }})
+	_, err := monarch.Open(monarch.Option{Mode: monarch.ModeLive, StateDir: dir, Masters: token.Masters{}, Now: func() time.Time { return now }})
+	if err == nil || !strings.Contains(err.Error(), "monarch seal") {
+		t.Fatal(err)
+	}
+	client, err := monarch.Open(monarch.Option{Mode: monarch.ModeLive, StateDir: dir, Masters: token.Masters{"pending": bytes.Repeat([]byte{1}, 32)}, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +41,7 @@ func TestImportAndRestrict(t *testing.T) {
 		t.Fatal(err)
 	}
 	masters := token.Masters{"master-2026": masterPub}
-	client, err = monarch.Open(monarch.Option{StateDir: dir, Masters: masters, Now: func() time.Time { return now }})
+	client, err = monarch.Open(monarch.Option{Mode: monarch.ModeLive, StateDir: dir, Masters: masters, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +85,7 @@ func TestGuardAndConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	masters := token.Masters{"master-2026": masterPub}
-	client, err := monarch.Open(monarch.Option{StateDir: dir, Masters: masters, Now: func() time.Time { return now }})
+	client, err := monarch.Open(monarch.Option{Mode: monarch.ModeLive, StateDir: dir, Masters: masters, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +130,7 @@ func TestHeartbeatAgainstServer(t *testing.T) {
 	}
 	dir := t.TempDir()
 	masters := token.Masters{"master-2026": masterPub}
-	client, err := monarch.Open(monarch.Option{StateDir: dir, Masters: masters, Now: func() time.Time { return now }, Environment: "prod"})
+	client, err := monarch.Open(monarch.Option{Mode: monarch.ModeLive, StateDir: dir, Masters: masters, Now: func() time.Time { return now }, Environment: "prod"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,9 +141,11 @@ func TestHeartbeatAgainstServer(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"instance_id": "inst_test", "token": snapshot, "delegation": delegation})
 	}))
 	defer srv.Close()
+	var notices []string
 	client, err = monarch.Open(monarch.Option{
-		StateDir: dir, ServerURL: srv.URL, LicenseKey: "mon_live_test", Environment: "prod",
+		Mode: monarch.ModeLive, StateDir: dir, ServerURL: srv.URL, LicenseKey: "mon_live_test", Environment: "prod",
 		Masters: masters, Now: func() time.Time { return now },
+		Info: func(msg string, _ ...any) { notices = append(notices, msg) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -151,10 +159,13 @@ func TestHeartbeatAgainstServer(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "cache.json")); err != nil {
 		t.Fatal(err)
 	}
+	if len(notices) != 1 || notices[0] != "activated" {
+		t.Fatalf("notices %v", notices)
+	}
 }
 
 func openOption(dir string, masters token.Masters, now time.Time) monarch.Option {
-	return monarch.Option{StateDir: dir, Masters: masters, Now: func() time.Time { return now }}
+	return monarch.Option{Mode: monarch.ModeLive, StateDir: dir, Masters: masters, Now: func() time.Time { return now }}
 }
 
 func signSnapshot(t *testing.T, now time.Time, masterPriv ed25519.PrivateKey, issuePub ed25519.PublicKey, issuePriv ed25519.PrivateKey, install ed25519.PublicKey, enforcement, reason string) (string, string) {
