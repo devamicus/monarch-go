@@ -41,19 +41,27 @@ func run(args []string) error {
 	return executeSeal(sealOpts{Server: server, Tag: tag, Dir: dir, Init: initOnly})
 }
 
-const sealUsage = `usage: monarch seal [options]
+const sealUsage = `monarch seal writes the pin package an application compiles in.
 
-Write the pin package an application compiles in.
+Create the package before you have a server:
+
+  monarch seal --init
+
+Download a public key and bind it to a build tag:
+
+  monarch seal --server https://monarch.example.com --tag prod
+
+Options:
 
   -i, --init
-        Write a development pin and do not contact the API.
+        Create the package with an empty key. The API is not contacted.
 
   -s, --server URL
-        Base URL of the control plane. Required with --tag.
+        Address of the control plane. Pass this together with --tag.
 
   -t, --tag name
-        Build tag that selects this pin, such as prod or staging.
+        Build tag for the downloaded key, such as prod or staging.
 
   -o, --output dir
-        Directory for the package. The default is internal/monarchpin.
+        Where to write the package. Defaults to internal/monarchpin.
 `

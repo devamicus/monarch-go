@@ -11,15 +11,44 @@ go get github.com/devamicus/monarch-go
 go install github.com/devamicus/monarch-go/cmd/monarch@latest
 ```
 
-## Wire it once
+## monarch seal
 
-Create the pin package, then call `Open` from `main`.
+```text
+$ monarch seal --help
+monarch seal writes the pin package an application compiles in.
+
+Create the package before you have a server:
+
+  monarch seal --init
+
+Download a public key and bind it to a build tag:
+
+  monarch seal --server https://monarch.example.com --tag prod
+
+Options:
+
+  -i, --init
+        Create the package with an empty key. The API is not contacted.
+
+  -s, --server URL
+        Address of the control plane. Pass this together with --tag.
+
+  -t, --tag name
+        Build tag for the downloaded key, such as prod or staging.
+
+  -o, --output dir
+        Where to write the package. Defaults to internal/monarchpin.
+```
 
 ```sh
 monarch seal --init
+
+monarch seal --server https://monarch.example.com --tag prod
+
+monarch seal --server https://staging.example.com --tag staging --output internal/licensing
 ```
 
-`--init` writes `internal/monarchpin` and leaves the key empty, so the application compiles before you have a server. The import below assumes that directory and the module path `example.com/app`. Change the import when your module path is different. `--output` chooses a different directory.
+The first command creates `internal/monarchpin` so the import below compiles. The second downloads the production public key. The third does the same for staging and writes a different directory, so that import path changes with it. The sample below uses `example.com/app`.
 
 ```go
 package main
@@ -88,28 +117,26 @@ Keep this call site. Development and production select behavior around it.
 
 ## Try the real server
 
-Ask the operator for the API URL and a license key. The license environment must be `prod` when `Environment` is `prod`. An empty `Environment` also means `prod`.
+Ask whoever runs Monarch for the API address and a license key. The license environment is `prod` unless they tell you otherwise. Leave `Environment` empty and the library sends `prod`.
 
 ```sh
-monarch seal --server https://monarch.example.com --tag prod
 MONARCH_MODE=live \
   MONARCH_SERVER_URL=https://monarch.example.com \
   MONARCH_LICENSE_KEY=mon_live_... \
   go run .
 ```
 
-The first success prints `activated` and an install id. The next start prints `connected` and reuses the snapshot in the state directory.
+The first success prints `activated` and an install id. The next start prints `connected` and reuses the snapshot already in the state directory.
 
 ## Ship
 
+Build with the same tag you sealed:
+
 ```sh
-monarch seal --server https://monarch.example.com --tag prod
 go build -tags prod
 ```
 
-The binary contains the public key and refuses `MONARCH_MODE=off` and `MONARCH_MODE=file`. With the variable unset, it behaves as live.
-
-A second server gets a second tag. `go build -tags staging` selects it. Passing both tags fails to compile. Do not use a tag the Go toolchain sets on its own (`linux`, `darwin`, `amd64`, and the rest); `seal` rejects those names.
+The public key is inside the binary, and the license check always runs. A staging server is a second seal, with `--tag staging`, and a build of `go build -tags staging`. Build with one tag. `seal` will not accept a name Go already uses, such as `linux` or `amd64`.
 
 ## State directory
 
