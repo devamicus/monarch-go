@@ -16,10 +16,12 @@ go install github.com/devamicus/monarch-go/cmd/monarch@latest
 Create the pin package, then call `Open` from `main`.
 
 ```sh
-monarch seal -init
+monarch seal --init
 ```
 
-That writes `internal/monarchpin`. The import path below uses that directory. If your module path is not `example.com/app`, change the import to match it. Pass `-o` to `seal` only when the package should live somewhere else.
+That writes `internal/monarchpin`. The import path below uses that directory. If your module path is not `example.com/app`, change the import to match it. Pass `--output` (`-o`) only when the package should live somewhere else.
+
+`--init` is `-i`, `--server` is `-s`, and `--tag` is `-t`. `monarch seal --help` prints them.
 
 ```go
 package main
@@ -72,7 +74,7 @@ Keep this call site. Development and production select behavior around it.
 |---|---|
 | `MONARCH_MODE=off go run .` | Same as an unset mode. `Allows` is true. `Limit` returns the maximum int64. `Config` returns revision 0 and an empty map. |
 | `MONARCH_MODE=file go run .` | Serves `monarch.local.json` from the working directory. The API is not called. A missing file stops startup. |
-| `MONARCH_MODE=live go run .` | Activates against `MONARCH_SERVER_URL`. Run `monarch seal -server` first, or startup stops with `no master keys; run monarch seal`. |
+| `MONARCH_MODE=live go run .` | Activates against `MONARCH_SERVER_URL`. Run `monarch seal --server` first, or startup stops with `no master keys; run monarch seal`. |
 
 `monarch.local.json`:
 
@@ -91,7 +93,7 @@ Keep this call site. Development and production select behavior around it.
 Ask the operator for the API URL and a license key. The license environment must be `prod` when `Environment` is `prod`. An empty `Environment` also means `prod`.
 
 ```sh
-monarch seal -server https://monarch.example.com -tag prod
+monarch seal --server https://monarch.example.com --tag prod
 MONARCH_MODE=live \
   MONARCH_SERVER_URL=https://monarch.example.com \
   MONARCH_LICENSE_KEY=mon_live_... \
@@ -103,7 +105,7 @@ The first success prints `activated` and an install id. The next start prints `c
 ## Ship
 
 ```sh
-monarch seal -server https://monarch.example.com -tag prod
+monarch seal --server https://monarch.example.com --tag prod
 go build -tags prod
 ```
 

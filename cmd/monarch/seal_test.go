@@ -15,6 +15,35 @@ import (
 	"testing"
 )
 
+func TestFlagAliases(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := run([]string{"seal", "-i"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join("internal", "monarchpin", "unsealed.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"seal", "--init", "--output", "pin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join("pin", "unsealed.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"seal", "-h"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"seal", "-s", "http://127.0.0.1:1", "-t", "prod"},
+		{"seal", "--server", "http://127.0.0.1:1", "--tag", "prod"},
+	} {
+		err := run(args)
+		if err == nil || strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestDefaultOutputDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
