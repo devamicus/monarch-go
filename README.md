@@ -19,9 +19,7 @@ Create the pin package, then call `Open` from `main`.
 monarch seal --init
 ```
 
-That writes `internal/monarchpin`. The import path below uses that directory. If your module path is not `example.com/app`, change the import to match it. Pass `--output` (`-o`) only when the package should live somewhere else.
-
-`--init` is `-i`, `--server` is `-s`, and `--tag` is `-t`. `monarch seal --help` prints them.
+`--init` writes `internal/monarchpin` and leaves the key empty, so the application compiles before you have a server. The import below assumes that directory and the module path `example.com/app`. Change the import when your module path is different. `--output` chooses a different directory.
 
 ```go
 package main

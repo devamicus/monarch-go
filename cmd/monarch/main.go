@@ -43,8 +43,17 @@ func run(args []string) error {
 
 const sealUsage = `usage: monarch seal [options]
 
-  -i, --init           write the development pin and skip the download
-  -s, --server URL     API base URL
-  -t, --tag name       Go build tag, such as prod or staging
-  -o, --output dir     package directory (default internal/monarchpin)
+Write the pin package an application compiles in.
+
+  -i, --init
+        Write a development pin and do not contact the API.
+
+  -s, --server URL
+        Base URL of the control plane. Required with --tag.
+
+  -t, --tag name
+        Build tag that selects this pin, such as prod or staging.
+
+  -o, --output dir
+        Directory for the package. The default is internal/monarchpin.
 `
