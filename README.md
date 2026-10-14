@@ -128,6 +128,37 @@ MONARCH_MODE=live \
 
 The first success prints `activated` and an install id. The next start prints `connected` and reuses the snapshot already in the state directory.
 
+## Air-gap
+
+Save the JSON from `POST /v1/offline-tokens` and point the process at it:
+
+```sh
+MONARCH_LICENSE_FILE=/var/lib/app/monarch/license.json ./app
+```
+
+`Open` imports that file. The call site stays `Open` and `Guard`. The file is the response body, with `token` and `delegation`. A newer file replaces the cached snapshot on the next start. `Option.LicenseFile` sets the same path in code.
+
+With no license configured, and again when an air-gap file has expired, startup prints the install public key and both of these procedures:
+
+```text
+monarch: no license configured
+
+Online. An admin creates a license and an activation key. Start this process with:
+
+  MONARCH_SERVER_URL=https://monarch.example.com
+  MONARCH_LICENSE_KEY=mon_live_...
+
+Offline. An admin issues a file for this public key:
+
+  public key: <base64url>
+
+Save that response and start this process with:
+
+  MONARCH_LICENSE_FILE=/var/lib/app/monarch/license.json
+```
+
+An expired file starts with `air-gap license expired` and prints the same public key. Replace the file and restart. The same public key refreshes that install.
+
 ## Ship
 
 Build with the same tag you sealed:
@@ -150,6 +181,7 @@ Leave `Option.Info` nil and these lines go to stderr:
 monarch: license check disabled for development
 monarch: using monarch.local.json for development
 monarch: activated instance=inst_... server=https://monarch.example.com
+monarch: imported instance=inst_...
 monarch: connected instance=inst_... server=https://monarch.example.com
 ```
 
@@ -171,7 +203,7 @@ Info: func(msg string, args ...any) {
 
 `Guard` activates when a license key is set and no snapshot is cached, then calls your function only while the install is serving. A later check that becomes restricted cancels that context. `Config` returns `ErrNotServing` when a live install is restricted. `Mode` is `serving` or `restricted`. `Reason` explains a restriction.
 
-`PublicKey` is the install key. For a host that cannot reach the API, print it and ask the operator for an air-gap file, then `Import` the token and delegation. A file does not heartbeat. It serves until it expires.
+`PublicKey` is the install key. A live process with no license, and a process whose air-gap file has expired, prints that key and the online and offline procedures. `Open` imports `MONARCH_LICENSE_FILE`. A file does not heartbeat. It serves until it expires.
 
 ## This repository
 

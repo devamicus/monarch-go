@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -164,6 +165,156 @@ func TestHeartbeatAgainstServer(t *testing.T) {
 	}
 }
 
+func TestOpenImportsLicenseFile(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	masterPub, masterPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuePub, issuePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	masters := token.Masters{"master-2026": masterPub}
+	first, err := monarch.Open(monarch.Option{Mode: monarch.ModeLive, StateDir: dir, Masters: masters, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, delegation := signSnapshot(t, now, masterPriv, issuePub, issuePriv, first.PublicKey(), token.EnforcementAllow, "")
+	path := filepath.Join(dir, "license.json")
+	raw, err := json.Marshal(map[string]string{"instance_id": "inst_test", "token": snapshot, "delegation": delegation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var notices []string
+	client, err := monarch.Open(monarch.Option{
+		Mode: monarch.ModeLive, StateDir: dir, Masters: masters, LicenseFile: path,
+		Now:  func() time.Time { return now },
+		Info: func(msg string, _ ...any) { notices = append(notices, msg) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !client.Allows("sso") || client.Mode() != monarch.ModeServing {
+		t.Fatalf("mode %s reason %s", client.Mode(), client.Reason())
+	}
+	if len(notices) != 1 || notices[0] != "imported" {
+		t.Fatalf("notices %v", notices)
+	}
+	started := false
+	if err := client.Guard(context.Background(), func(context.Context) error {
+		started = true
+		return nil
+	}); err != nil || !started {
+		t.Fatalf("started %v err %v", started, err)
+	}
+
+	t.Setenv("MONARCH_LICENSE_FILE", path)
+	again, err := monarch.Open(monarch.Option{
+		Mode: monarch.ModeLive, StateDir: dir, Masters: masters, Now: func() time.Time { return now },
+		Info: func(msg string, _ ...any) { notices = append(notices, msg) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Allows("sso") {
+		t.Fatal(again.Reason())
+	}
+	if notices[len(notices)-1] != "connected" {
+		t.Fatalf("notices %v", notices)
+	}
+
+	t.Setenv("MONARCH_LICENSE_FILE", filepath.Join(dir, "missing.json"))
+	if _, err := monarch.Open(monarch.Option{Mode: monarch.ModeLive, StateDir: dir, Masters: masters, Now: func() time.Time { return now }}); err == nil {
+		t.Fatal("expected missing file")
+	}
+	if _, err := monarch.Open(monarch.Option{Mode: monarch.ModeOff, StateDir: dir, Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLicenseInstructions(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	masterPub, masterPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuePub, issuePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	masters := token.Masters{"master-2026": masterPub}
+	var notices []string
+	info := func(msg string, _ ...any) { notices = append(notices, msg) }
+	first, err := monarch.Open(monarch.Option{
+		Mode: monarch.ModeLive, StateDir: dir, Masters: masters, Now: func() time.Time { return now }, Info: info,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "no license configured") {
+		t.Fatalf("notices %v", notices)
+	}
+	pub := base64.RawURLEncoding.EncodeToString(first.PublicKey())
+	offline := strings.Index(notices[0], "Offline")
+	keyAt := strings.Index(notices[0], "public key: "+pub)
+	if offline < 0 || keyAt < offline || strings.Contains(notices[0], "curl") {
+		t.Fatalf("notice %s", notices[0])
+	}
+	for _, part := range []string{"MONARCH_LICENSE_KEY", "MONARCH_LICENSE_FILE"} {
+		if !strings.Contains(notices[0], part) {
+			t.Fatalf("missing %s in %s", part, notices[0])
+		}
+	}
+
+	snapshot, delegation := signFile(t, now, masterPriv, issuePub, issuePriv, first.PublicKey())
+	if err := first.Import(snapshot, delegation); err != nil {
+		t.Fatal(err)
+	}
+	notices = nil
+	expired, err := monarch.Open(monarch.Option{
+		Mode: monarch.ModeLive, StateDir: dir, Masters: masters,
+		Now: func() time.Time { return now.Add(2 * time.Hour) }, Info: info,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.Mode() != monarch.ModeRestricted {
+		t.Fatal(expired.Mode())
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "air-gap license expired") || !strings.Contains(notices[0], pub) {
+		t.Fatalf("notices %v", notices)
+	}
+
+	online := t.TempDir()
+	holder, err := monarch.Open(monarch.Option{
+		Mode: monarch.ModeLive, StateDir: online, Masters: masters, Now: func() time.Time { return now },
+		Info: func(string, ...any) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, delegation = signSnapshot(t, now, masterPriv, issuePub, issuePriv, holder.PublicKey(), token.EnforcementAllow, "")
+	if err := holder.Import(snapshot, delegation); err != nil {
+		t.Fatal(err)
+	}
+	notices = nil
+	if _, err := monarch.Open(monarch.Option{
+		Mode: monarch.ModeLive, StateDir: online, Masters: masters,
+		Now: func() time.Time { return now.Add(2 * time.Hour) }, Info: info,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) != 0 {
+		t.Fatalf("heartbeat expiry printed %v", notices)
+	}
+}
+
 func openOption(dir string, masters token.Masters, now time.Time) monarch.Option {
 	return monarch.Option{Mode: monarch.ModeLive, StateDir: dir, Masters: masters, Now: func() time.Time { return now }}
 }
@@ -197,6 +348,29 @@ func signSnapshot(t *testing.T, now time.Time, masterPriv ed25519.PrivateKey, is
 		Entitlements: token.Entitlements{Features: features, Limits: limits},
 		Config:       token.Config{Schema: "appconfig/v1", Values: map[string]any{"region": "eu"}},
 		NextCheckin:  600, Environment: "prod", JTI: "jti_1",
+	}
+	return sign(t, "ed-prod", token.TypToken, issuePriv, mustJSON(t, claims)), sign(t, "master-2026", token.TypDelegation, masterPriv, mustJSON(t, delegation))
+}
+
+func signFile(t *testing.T, now time.Time, masterPriv ed25519.PrivateKey, issuePub ed25519.PublicKey, issuePriv ed25519.PrivateKey, install ed25519.PublicKey) (string, string) {
+	t.Helper()
+	delegation := token.Delegation{
+		Issuer: token.RootIssuer, Subject: "ed-prod", PublicKey: issuePub, Environment: "prod",
+		Allow: []string{token.AllowSignToken}, NotBefore: now.Add(-time.Hour).Unix(), ExpiresAt: now.Add(90 * 24 * time.Hour).Unix(),
+	}
+	thumb, err := token.Thumbprint(install)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := token.Claims{
+		Schema: token.SchemaV1, Issuer: token.Issuer, Audience: "product", Subject: "inst_test",
+		Org: "org_1", License: "lic_1", Version: 1, Delivery: token.DeliveryFile, Enforcement: token.EnforcementAllow,
+		IssuedAt: now.Unix(), NotBefore: now.Unix(), ExpiresAt: now.Add(time.Hour).Unix(),
+		LicenseExpiresAt: now.Add(30 * 24 * time.Hour).Unix(),
+		Confirmation:     token.Confirmation{Thumbprint: thumb},
+		Entitlements:     token.Entitlements{Features: map[string]bool{"sso": true}, Limits: map[string]int64{"nodes": 3}},
+		Config:           token.Config{Schema: "appconfig/v1", Values: map[string]any{"region": "eu"}},
+		Environment:      "prod", JTI: "jti_file",
 	}
 	return sign(t, "ed-prod", token.TypToken, issuePriv, mustJSON(t, claims)), sign(t, "master-2026", token.TypDelegation, masterPriv, mustJSON(t, delegation))
 }

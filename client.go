@@ -37,6 +37,8 @@ var ErrNotServing = errors.New("monarch: not serving")
 //
 // Mode off, file, and live follow MONARCH_MODE when Mode is empty. An unsealed
 // process with no mode set skips license checks. Sealed refuses off and file.
+// LicenseFile is the JSON from POST /v1/offline-tokens. An empty field reads
+// MONARCH_LICENSE_FILE. Open imports that file when the path is set.
 // Info receives notices. A nil Info prints text lines to stderr.
 type Option struct {
 	StateDir    string
@@ -47,6 +49,7 @@ type Option struct {
 	Sealed      bool
 	Mode        string
 	File        string
+	LicenseFile string
 	Info        func(msg string, args ...any)
 	HTTP        *http.Client
 	Now         func() time.Time
@@ -117,9 +120,22 @@ func Open(opt Option) (*Client, error) {
 	if raw, err := os.ReadFile(filepath.Join(opt.StateDir, "highwater")); err == nil {
 		c.high, _ = strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
 	}
+	before := c.cache.Token
+	if path := licenseFilePath(opt); path != "" {
+		if err := c.importLicenseFile(path); err != nil {
+			if errors.Is(err, token.ErrWindow) {
+				c.explainLicense("air-gap license expired")
+			}
+			return nil, err
+		}
+	}
 	c.evaluate(opt.Now())
-	if c.mode == ModeServing {
+	if c.cache.Token != before {
+		c.info("imported", "instance", c.cache.InstanceID)
+	} else if c.mode == ModeServing {
 		c.info("connected", "instance", c.cache.InstanceID, "server", c.opt.ServerURL)
+	} else if headline, ok := c.licenseHeadline(); ok {
+		c.explainLicense(headline)
 	}
 	return c, nil
 }
@@ -237,6 +253,9 @@ func (c *Client) prepare(ctx context.Context) error {
 func (c *Client) supervise(ctx context.Context, cancel context.CancelFunc) {
 	for {
 		if err := c.notServing(); err != nil {
+			if headline, ok := c.licenseHeadline(); ok {
+				c.explainLicense(headline)
+			}
 			cancel()
 			return
 		}
@@ -353,6 +372,7 @@ func (c *Client) Heartbeat(ctx context.Context) error {
 }
 
 // Import stores an air-gap license file after it verifies for this install.
+// Open does this when LicenseFile or MONARCH_LICENSE_FILE is set.
 func (c *Client) Import(snapshotToken, delegation string) error {
 	if err := c.requireLive(); err != nil {
 		return err
