@@ -1,4 +1,4 @@
-# monarch-go
+# Monarch Application SDK in Go
 
 Library an application embeds to enforce a Monarch license. The control plane is a separate server. Someone who runs that server gives you two values: the API URL, and one license key (`MONARCH_LICENSE_KEY`). You do not copy a master key by hand. `monarch seal` downloads the public key and writes it into your module.
 
